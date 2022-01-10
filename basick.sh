@@ -1,25 +1,26 @@
 #!/bin/bash
 
-# Cập nhật 1/10/2019
-#Update the apt package index and install packages to allow apt to use a repository over HTTPS
-sudo apt-get install \ 
-    apt-transport-https \ 
-    ca-certificates \ 
-    curl \ 
-    gnupg \ 
-    lsb-release
+# Cập nhật 1/10/2022
+sudo sed -i '/ swap / s/^\(.*\)$/#\1/g' /etc/fstab
+sudo swapoff -a
+
  # Cai dat Docker
-#add Docker’s official GPG ke
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo gpg --dearmor -o /usr/share/keyrings/docker-archive-keyring.gpg
-#Setup the stable repository
-echo \ 
-  "deb [arch=amd64 signed-by=/usr/share/keyrings/docker-archive-keyring.gpg] https://download.docker.com/linux/ubuntu \ 
-  $(lsb_release -cs) stable" | sudo tee /etc/apt/sources.list.d/docker.list > /dev/null
- #Update and then run the installation:
-sudo apt-get update 
-sudo apt-get install docker-ce docker-ce-cli containerd.io
-#Change Docker to systems:
-cat <<EOF | sudo tee /etc/docker/daemon.json
+#Update the apt package index and install packages to allow apt to use a repository over HTTPS
+sudo apt update
+sudo apt-get install curl apt-transport-https ca-certificates software-properties-common
+# Add repo and Install packages
+sudo apt update
+sudo apt install -y curl gnupg2 software-properties-common apt-transport-https ca-certificates
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
+sudo add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
+sudo apt update
+sudo apt install -y containerd.io docker-ce docker-ce-cli
+
+# Create required directories
+sudo mkdir -p /etc/systemd/system/docker.service.d
+
+# Create daemon json config file
+sudo tee /etc/docker/daemon.json <<EOF
 {
   "exec-opts": ["native.cgroupdriver=systemd"],
   "log-driver": "json-file",
@@ -30,11 +31,107 @@ cat <<EOF | sudo tee /etc/docker/daemon.json
 }
 EOF
 
+# Start and enable Services
+sudo systemctl daemon-reload 
+sudo systemctl restart docker
+sudo systemctl enable docker
 
-#all node
-sudo apt-get install -y apt-transport-https ca-certificates curl
-sudo curl -fsSLo /usr/share/keyrings/kubernetes-archive-keyring.gpg https://packages.cloud.google.com/apt/doc/apt-key.gpg
-echo "deb [signed-by=/usr/share/keyrings/kubernetes-archive-keyring.gpg] https://apt.kubernetes.io/ kubernetes-xenial main" | sudo tee /etc/apt/sources.list.d/kubernetes.list
-sudo apt-get update
-sudo apt-get install -y kubelet kubeadm kubectl
+# Ensure you load modules
+sudo modprobe overlay
+sudo modprobe br_netfilter
+
+# Set up required sysctl params
+sudo tee /etc/sysctl.d/kubernetes.conf<<EOF
+net.bridge.bridge-nf-call-ip6tables = 1
+net.bridge.bridge-nf-call-iptables = 1
+net.ipv4.ip_forward = 1
+EOF
+
+# Reload sysctl
+sudo sysctl --system
+
+# Add Cri-o repo
+sudo su -
+OS="xUbuntu_20.04"
+VERSION=1.22
+echo "deb https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/$OS/ /" > /etc/apt/sources.list.d/devel:kubic:libcontainers:stable.list
+echo "deb http://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable:/cri-o:/$VERSION/$OS/ /" > /etc/apt/sources.list.d/devel:kubic:libcontainers:stable:cri-o:$VERSION.list
+curl -L https://download.opensuse.org/repositories/devel:kubic:libcontainers:stable:cri-o:$VERSION/$OS/Release.key | apt-key add -
+curl -L https://download.opensuse.org/repositories/devel:/kubic:/libcontainers:/stable/$OS/Release.key | apt-key add -
+
+# Update CRI-O CIDR subnet
+sudo sed -i 's/10.85.0.0/192.168.0.0/g' /etc/cni/net.d/100-crio-bridge.conf
+
+# Install CRI-O
+sudo apt update
+sudo apt install cri-o cri-o-runc
+
+# Start and enable Service
+sudo systemctl daemon-reload
+sudo systemctl restart crio
+sudo systemctl enable crio
+sudo systemctl status crio
+# Configure persistent loading of modules
+sudo tee /etc/modules-load.d/containerd.conf <<EOF
+overlay
+br_netfilter
+EOF
+
+# Load at runtime
+sudo modprobe overlay
+sudo modprobe br_netfilter
+
+# Ensure sysctl params are set
+sudo tee /etc/sysctl.d/kubernetes.conf<<EOF
+net.bridge.bridge-nf-call-ip6tables = 1
+net.bridge.bridge-nf-call-iptables = 1
+net.ipv4.ip_forward = 1
+EOF
+
+# Reload configs
+sudo sysctl --system
+
+# Install required packages
+sudo apt install -y curl gnupg2 software-properties-common apt-transport-https ca-certificates
+
+# Add Docker repo
+curl -fsSL https://download.docker.com/linux/ubuntu/gpg | sudo apt-key add -
+sudo add-apt-repository "deb [arch=amd64] https://download.docker.com/linux/ubuntu $(lsb_release -cs) stable"
+
+# Install containerd
+sudo apt update
+sudo apt install -y containerd.io
+
+# Configure containerd and start service
+sudo su -
+mkdir -p /etc/containerd
+containerd config default>/etc/containerd/config.toml
+
+# restart containerd
+sudo systemctl restart containerd
+sudo systemctl enable containerd
+systemctl status  containerd
+
+
+
+#kubernetes
+sudo apt update
+sudo apt -y install curl apt-transport-https
+curl -s https://packages.cloud.google.com/apt/doc/apt-key.gpg | sudo apt-key add -
+echo "deb https://apt.kubernetes.io/ kubernetes-xenial main" | sudo tee /etc/apt/sources.list.d/kubernetes.list
+sudo apt update
+sudo apt -y install vim git curl wget kubelet kubeadm kubectl
 sudo apt-mark hold kubelet kubeadm kubectl
+# Enable kernel modules
+sudo modprobe overlay
+sudo modprobe br_netfilter
+
+# Add some settings to sysctl
+sudo tee /etc/sysctl.d/kubernetes.conf<<EOF
+net.bridge.bridge-nf-call-ip6tables = 1
+net.bridge.bridge-nf-call-iptables = 1
+net.ipv4.ip_forward = 1
+EOF
+
+# Reload sysctl
+sudo sysctl --system
